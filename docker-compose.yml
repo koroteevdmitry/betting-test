@@ -1,0 +1,96 @@
+version: "3.9"
+
+services:
+  betting-db:
+    image: postgres:14
+    container_name: betting-bets-db
+    restart: always
+    environment:
+        POSTGRES_USER: ${POSTGRES_USER}
+        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+        POSTGRES_DB: ${POSTGRES_DB}
+    networks:
+      - betting-test
+    volumes:
+      - ./volumes/pg_data_bets:/var/lib/postgresql/data
+    ports:
+      - 127.0.0.1:5435:5432
+
+  events-db:
+    image: postgres:14
+    container_name: betting-events-db
+    restart: always
+    environment:
+        POSTGRES_USER: ${POSTGRES_USER}
+        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+        POSTGRES_DB: ${POSTGRES_DB}
+    networks:
+      - betting-test
+    volumes:
+      - ./volumes/pg_data_events:/var/lib/postgresql/data
+    ports:
+      - 127.0.0.1:5437:5432
+
+  redis:
+    image: redis:alpine
+    container_name: betting-redis
+    restart: always
+    networks:
+      - betting-test
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./volumes/redis_data:/data
+
+  line-provider:
+    image: betting-line-provider
+    container_name: betting-line-provider
+    build:
+      context: .
+      dockerfile: ../betting-test/docker/line-provider.dockerfile
+    restart: always
+    tty: true
+    environment:
+      DB_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@events-db:5432/${POSTGRES_DB}
+      MIGRATION_DB_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@events-db:5432/${POSTGRES_DB}
+      REDIS_URL: ${REDIS_URL}
+    networks:
+      - betting-test
+    volumes:
+      - ./volumes/logs:/line-provider/logs
+    depends_on:
+      - events-db
+      - redis
+    ports:
+      - 8001:81
+    command: uvicorn run:app --host 0.0.0.0 --port 81
+
+
+  bet-maker:
+    image: betting-bet-maker
+    container_name: betting-bet-maker
+    build:
+      context: .
+      dockerfile: ../betting-test/docker/bet-maker.dockerfile
+    restart: always
+    tty: true
+    environment:
+      DB_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@betting-db:5432/${POSTGRES_DB}
+      MIGRATION_DB_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@betting-db:5432/${POSTGRES_DB}
+      REDIS_URL: ${REDIS_URL}
+      EVENTS_API_URL: ${EVENTS_API_URL}
+    networks:
+      - betting-test
+    volumes:
+      - ./volumes/logs:/bet-maker/logs
+    depends_on:
+      - betting-db
+      - redis
+      - line-provider
+
+    ports:
+      - 8000:80
+    command: uvicorn run:app --host 0.0.0.0 --port 80
+
+networks:
+  betting-test:
